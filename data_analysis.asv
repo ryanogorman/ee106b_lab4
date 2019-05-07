@@ -1,0 +1,172 @@
+clear all
+close all
+clc
+
+%% Package paths
+
+cur = pwd;
+addpath( genpath( [cur, '/gen/' ] ));
+addpath( genpath( [cur, '/3to5samplesvideos' ] ));
+
+%% testing with generated data
+% Note the values used are totally made up and shouldn't be used as
+% starting points for your actual analysis
+
+alpha = 0.1;
+gamma = 0.5;
+t = 0:0.01:2;
+u = 150*ones(size(t));
+tau0 = 0;
+dtau0 = 0;
+tau = find_tau(u, t, alpha, gamma, tau0, dtau0);
+
+K = 3;
+D = 0.4;
+q0 = 0;
+dq0 = 0;
+q = find_q(tau, t, K, D, q0, dq0);
+
+
+% x = K, D, alpha, gamma
+
+cost = @(x) cost_function(x(1), x(2), x(3), x(4), t, u, q, q0, dq0, tau0, dtau0); %is just error term
+
+
+[X, resnorm] = lsqnonlin(cost, [2.6, 0.5, 0.31, 0.6])
+% [X, resnorm] = lsqnonlin(cost, [K, D, alpha, gamma])
+
+
+%% 
+
+clear all
+close all
+clc
+
+%% Load CSV
+d1 = csvread('1_sample_pwm_80_ignore.csv',1,1);
+d2 = csvread('1_sample_pwm_120_ignore.csv',1,1); % edit this one
+d3 = csvread('1_sample_pwm_120_ignore.csv',1,1);
+% d4 = csvread('4_sample_pwm_100_ignore');
+% d5 = csvread('5_sample_pwm_100_ignore');
+
+
+%% Generate q(t)
+b = 5.8393;
+m = -0.0096;
+bend1 = d1(:,6);
+q1 = bend1*m+b;
+u1 = d1(:,2);
+time1 = d1(:,1);
+
+bend2 = d2(:,6);
+q2 = bend2*m+b;
+u2 = d2(:,2);
+time2 = d2(:,1);
+
+bend3 = d3(:,6);
+q3 = bend3*m+b;
+u3 = d3(:,2);
+time3 = d3(:,1);
+
+% plot(q1)
+% hold on
+% plot(q2)
+% plot(q3)
+
+%% do your regression
+% first let's find K and alpha assuming quasistatic
+n = find(time2>3,1);
+N = find(time2>10,1) - 1;
+q_used1 = q1(n:N);
+q_used2 = q2(n:N);
+q_used3 = q3(n:N);
+
+G = zeros(1,length(q_used2));
+for i = 1:N-n
+    G(i) = G_gen(q_used2(i));
+%     G(i+N-n) = G_gen(q_used2(i));
+%     G(i+2*(N-n)) = G_gen(q_used3(i));
+end
+q_used = [q_used1;q_used2;q_used3];
+u = [u1(n:N);u2(n:N);u3(n:N)];
+A = [-q_used2, u2(n:N)];
+b = G';
+K_alpha = A\b;
+K = K_alpha(1)
+alpha = K_alpha(2)
+
+%%%
+t = time2(1:N);
+u = u2(1:N);
+q = q2(1:N);
+tau0 = 0; % initial conditions
+dtau0 = 0;
+q0 = 0.0001;
+dq0 = 0;
+% K,D,alpha,gamma
+%gamma = .0013;
+%cost = @(x) cost_function(K, x(1), alpha, x(2), t, u, q, q0, dq0, tau0, dtau0); %is just error term
+cost = @(x) cost_function(K, x(1), x(2), x(3), t, u, q, q0, dq0, tau0, dtau0); %is just error term
+
+options = optimoptions('lsqnonlin','MaxFunctionEvaluations',1000);
+% [X, resnorm] = lsqnonlin(cost, [1e-3,1e-3],[0,0],[],options);
+% D = X(1);
+% gamma = X(2);
+[X, resnorm] = lsqnonlin(cost, [1e-2, 1e-4, 1e-6, 1e-3],[0,0,0,0],[],options);
+K = X(1);
+D = X(2);
+alpha = X(3);
+gamma = X(4);
+
+%K = Cs;
+%K=.0112;
+tau_est = find_tau(u, t, alpha, gamma, tau0, dtau0);
+q_pred = find_q(tau_est, t, K, D, q0, dq0);
+plot(t,q)
+hold on
+plot(t,q_pred,'--')
+X
+
+%%
+% static analysis to find C1 and C2
+% alpha and gamma are the same
+q1_m = mean(q_used1);
+q2_m = mean(q_used2);
+q3_m = mean(q_used3);
+u1_m = 80;
+u2_m = 100;
+u3_m = 120;
+G1_m = G_gen(q1_m);
+G2_m = G_gen(q2_m);
+G3_m = G_gen(q3_m);
+
+K1 = (alpha*u1_m - G1_m)/q1_m;
+K2 = (alpha*u2_m - G2_m)/q2_m;
+K3 = (alpha*u3_m - G3_m)/q3_m;
+
+lambda1 = q1_m/sin(q1_m);
+lambda2 = q2_m/sin(q2_m);
+lambda3 = q3_m/sin(q3_m);
+
+lams1 = lambdas_fun(lambda1);
+lams2 = lambdas_fun(lambda2);
+lams3 = lambdas_fun(lambda3);
+
+A = [2*lams1(1)*q1_m, 4*lams1(1)*lams1(2)*q1_m;...
+    2*lams2(1)*q2_m, 4*lams2(1)*lams2(2)*q2_m;...
+    2*lams3(1)*q3_m, 4*lams3(1)*lams3(2)*q3_m];
+b = [alpha*u1_m - G1_m;...
+    alpha*u2_m - G2_m;...
+    alpha*u3_m - G3_m];
+Cs = A\b;
+
+%%
+C1 = Cs(1);
+C2 = Cs(2);
+qt = linspace(0,2);
+K = zeros(1,length(qt));
+for i = 1:length(qt)
+    K(i) = K_gen(qt(i),C1,C2);
+end
+plot(qt,K)
+
